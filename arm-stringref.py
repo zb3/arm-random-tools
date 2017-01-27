@@ -277,6 +277,9 @@ def runcode(memory, codestr):
         m = instr_re.match(line)
 
         if not m:
+            if not addr_start and not addr_end and display_code:
+              print(line)
+
             continue
 
         if addr_start and int(m.group('addr'), 16) < addr_start:
