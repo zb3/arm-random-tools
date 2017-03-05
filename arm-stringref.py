@@ -35,6 +35,8 @@ parser.add_argument('-s', '--start', default='0',
                     help="Search start virtual offset (may be 0x...)")
 parser.add_argument('-e', '--end', default='0',
                     help="Search end virtual offset (may be 0x...)")
+parser.add_argument('-D', '--disassemble-all', action='store_true',
+                    help="Disassemble all sections")
 parser.add_argument('-l', '--list-references', action='store_true',
                     help="Display only references to strings with their addresses, without code")
 parser.add_argument('-a', '--display-all', action='store_true',
@@ -60,6 +62,7 @@ addr_start = int(args.start, 16) if 'x' in args.start else int(args.start)
 addr_end = int(args.end, 16) if 'x' in args.end else int(args.end)
 display_code = not args.list_references
 display_all = args.display_all
+disassemble_all = args.disassemble_all
 require_start = not args.no_require_start
 show_on_branch = args.show_on_branch  # not as good as I thought...
 
@@ -169,7 +172,7 @@ def disassemble(filename):
     if force_thumb:
         args.extend(['-M', 'force-thumb'])
 
-    args.extend(['-EL', '-d', filename])
+    args.extend(['-EL', '-D' if disassemble_all else '-d', filename])
 
     return subprocess.check_output(args).decode('iso-8859-1')
 
