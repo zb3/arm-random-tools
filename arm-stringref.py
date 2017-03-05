@@ -177,22 +177,22 @@ def disassemble(filename):
     return subprocess.check_output(args).decode('iso-8859-1')
 
 
-def pc(addr):
+def pc(addr, thumb=True):
     """
-    Get the PC register considering we are currently executing instruction at addr (and we're in thumb mode)
+    Get the PC register considering we are currently executing instruction at addr
 
     Note(v7-thumb): this function will not return correct address for operations involving memory
     (like LDR), because those operations always treat the value of PC as word-aligned
     For those operations, the value of PC is addr + 4-(addr%4)
     """
-    return addr + 4
+    return addr + (4 if thumb else 8)
 
 
 # Extremely limited instruction interpretation
 # IT blocks are not currently supported
 
 def run_ldr_pc(regs, memory, instr, mo):
-    m = re.match(r'ldr(?:[.][w])? (\w+), \[pc, #(\d+)\]', instr)
+    m = re.match(r'ldr(?:[.][w])? (\w+), \[pc(?:, #(\d+))?](?!,)', instr)
     if not m:
         return None
 
@@ -260,7 +260,8 @@ def run(memory, m):
     # set pc for current instruction
     # for LDR instruction, it's not used as it needs
     # to be aligned
-    regs['pc'] = pc(addr)
+    # length of "word" group is 9 for 2byte thumb instructions
+    regs['pc'] = pc(addr, False if len(m.group('word')) == 8 else True)
 
     ret = run_ldr_pc(regs, memory, instr, m) or \
         run_add(regs, memory, instr) or \
