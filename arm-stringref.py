@@ -37,6 +37,8 @@ parser.add_argument('-e', '--end', default='0',
                     help="Search end virtual offset (may be 0x...)")
 parser.add_argument('-l', '--list-references', action='store_true',
                     help="Display only references to strings with their addresses, without code")
+parser.add_argument('-a', '--display-all', action='store_true',
+                    help="Display computed values in registers even if they don't point at any string")
 parser.add_argument('-nr', '--no-require-start', action='store_true',
                     help="Don't require a null byte before the string starts")
 parser.add_argument('-b', '--show-on-branch', action='store_true',
@@ -57,6 +59,7 @@ force_thumb = not args.no_force_thumb
 addr_start = int(args.start, 16) if 'x' in args.start else int(args.start)
 addr_end = int(args.end, 16) if 'x' in args.end else int(args.end)
 display_code = not args.list_references
+display_all = args.display_all
 require_start = not args.no_require_start
 show_on_branch = args.show_on_branch  # not as good as I thought...
 
@@ -111,6 +114,9 @@ def cstring_check(memory, instr_addr, addr):
 
         if not display_code:
             print('')
+            
+    elif display_code and display_all:
+        print('; val=%s' % hex(addr), end='')
 
 
 def cstring_check_arg(memory, regs):
