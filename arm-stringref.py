@@ -35,6 +35,8 @@ parser.add_argument('-s', '--start', default='0',
                     help="Search start virtual offset (may be 0x...)")
 parser.add_argument('-e', '--end', default='0',
                     help="Search end virtual offset (may be 0x...)")
+parser.add_argument('-z', '--disassemble-zeroes', action='store_true',
+                    help="Do not skip blocks of zeroes when disassembling")
 parser.add_argument('-D', '--disassemble-all', action='store_true',
                     help="Disassemble all sections")
 parser.add_argument('-l', '--list-references', action='store_true',
@@ -63,6 +65,7 @@ addr_end = int(args.end, 16) if 'x' in args.end else int(args.end)
 display_code = not args.list_references
 display_all = args.display_all
 disassemble_all = args.disassemble_all
+disassemble_zeroes = args.disassemble_zeroes
 require_start = not args.no_require_start
 show_on_branch = args.show_on_branch  # not as good as I thought...
 
@@ -171,6 +174,9 @@ def disassemble(filename):
     args = [objdump]
     if force_thumb:
         args.extend(['-M', 'force-thumb'])
+        
+    if disassemble_zeroes:
+      args.extend(['-z'])
 
     args.extend(['-EL', '-D' if disassemble_all else '-d', filename])
 
