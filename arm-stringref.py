@@ -31,6 +31,8 @@ parser.add_argument('-cc', '--cross-compile', default=None,
                     help='Path with prefix to objdump. Overwrites CROSS_COMPILE environment variable')
 parser.add_argument('-nt', '--no-force-thumb', action='store_true',
                     help='Don\'t force THUMB mode (forced by default)')
+parser.add_argument('-d', '--demangle', action='store_true',
+                    help='Pass the -C option to objdump')
 parser.add_argument('-s', '--start', default='0',
                     help="Search start virtual offset (may be 0x...)")
 parser.add_argument('-e', '--end', default='0',
@@ -64,6 +66,7 @@ addr_start = int(args.start, 16) if 'x' in args.start else int(args.start)
 addr_end = int(args.end, 16) if 'x' in args.end else int(args.end)
 display_code = not args.list_references
 display_all = args.display_all
+demangle = args.demangle
 disassemble_all = args.disassemble_all
 disassemble_zeroes = args.disassemble_zeroes
 require_start = not args.no_require_start
@@ -174,6 +177,9 @@ def disassemble(filename):
     args = [objdump]
     if force_thumb:
         args.extend(['-M', 'force-thumb'])
+        
+    if demangle:
+      args.extend(['-C'])
         
     if disassemble_zeroes:
       args.extend(['-z'])
