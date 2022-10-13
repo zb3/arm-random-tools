@@ -3,11 +3,7 @@ A tool to find references to string constants in 32bit ARM executables that deal
 
 Original tool written by: Rafal Kolanski (xaph.net) 2010
 Original tool can be found here: https://www.mobileread.com/forums/showthread.php?t=80872
-Modified by zb3 2017
-
-* For 32bit ARM executables only
-* Assumes we're in thumb mode (see "pc" function)
-* Reuires pyelftools package and a toolchain with objdump
+Modified by zb3 2017/2022
 
 Yes, the code needs to be refactored.
 
@@ -20,17 +16,14 @@ import re
 import argparse
 
 from collections import defaultdict
-from elftools.elf.elffile import ELFFile
-
-
 
 parser = argparse.ArgumentParser(description='Dissassemble a given 32bit ARM executable, showing references to string constants in comments.')
 
 parser.add_argument('file', help='Program to disassemble')
 parser.add_argument('-cc', '--cross-compile', default=None,
                     help='Path with prefix to objdump. Overwrites CROSS_COMPILE environment variable')
-parser.add_argument('-nt', '--no-force-thumb', action='store_true',
-                    help='Don\'t force THUMB mode (forced by default)')
+parser.add_argument('-ft', '--force-thumb', action='store_true',
+                    help='Force THUMB mode')
 parser.add_argument('-d', '--demangle', action='store_true',
                     help='Pass the -C option to objdump')
 parser.add_argument('-s', '--start', default='0',
@@ -52,16 +45,14 @@ parser.add_argument('-b', '--show-on-branch', action='store_true',
 
 args = parser.parse_args()
 
-
-# I'm 100% sure this default won't work for you unless you manually create these directories :>
-BASE = '/home/zb3/sp/ndk/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-'
+BASE = ''
 if args.cross_compile:
     BASE = args.cross_compile
 elif 'CROSS_COMPILE' in os.environ:
     BASE = os.environ['CROSS_COMPILE']
 
 
-force_thumb = not args.no_force_thumb
+force_thumb = args.force_thumb
 addr_start = int(args.start, 16) if 'x' in args.start else int(args.start)
 addr_end = int(args.end, 16) if 'x' in args.end else int(args.end)
 display_code = not args.list_references
@@ -75,7 +66,7 @@ show_on_branch = args.show_on_branch  # not as good as I thought...
 
 # regex matching an asm line in objdump with default settings
 instr_re = re.compile(
-    r'\W+(?P<addr>[0-9a-f]+):\W+(?P<word>[0-9a-f]+([ ][0-9a-f]+)?)\W+(?P<instr>[^;]*);?((.*?(?P<offset>0x[0-9a-f]+))?([^>]*?)|(.*?(?P<offset2>[0-9a-f]+))?(.*?))$')
+    r'\W+(?P<addr>[0-9a-f]+):\W+(?P<word>[0-9a-f]+([ ][0-9a-f]+)?)\W+(?P<instr>[^;()]*)(?P<cmt>[^()]*)(\(File Offset: (?P<offset>0x[0-9a-f]+)\))?.*?$')
 objdump = BASE + 'objdump'
 
 
@@ -112,7 +103,7 @@ def load_cstring(memory, addr):
 
 
 def cstring_check(memory, instr_addr, addr):
-    s = load_cstring(memory, addr_to_offset(addr))
+    s = load_cstring(memory, addr)
     if s:
         if not display_code:
             print('%x:\t' % instr_addr, end='')
@@ -131,25 +122,13 @@ def cstring_check(memory, instr_addr, addr):
 def cstring_check_arg(memory, regs):
     to_print = []
 
-    for reg in ('r0', 'r1', 'r2', 'r3'):
+    for reg in ('r0', 'r1', 'r2', 'r3', 'x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x6', 'x7'):
         s = load_cstring(memory, addr_to_offset(regs[reg]))
 
         if s:
             to_print.append(reg + '="' + s + '"')
 
     return ', '.join(to_print)
-
-
-def addr_to_offset(addr):
-    last_pair = [0, 0]
-    for p in file_mem_layout:
-        if p[0] > addr:
-            break
-
-        last_pair = p
-
-    return addr - last_pair[0] + last_pair[1]
-
 
 def is_branch(instr):
     if ' ' not in instr:
@@ -171,6 +150,7 @@ def is_branch(instr):
 
 
 def word_clamp(w): return w & 0xffffffff
+def xword_clamp(w): return w & 0xffffffffffffffff
 
 
 def disassemble(filename):
@@ -184,9 +164,10 @@ def disassemble(filename):
     if disassemble_zeroes:
       args.extend(['-z'])
 
-    args.extend(['-EL', '-D' if disassemble_all else '-d', filename])
+    args.extend(['-EL', '-F', '-D' if disassemble_all else '-d', filename])
 
     return subprocess.check_output(args).decode('iso-8859-1')
+
 
 
 def pc(addr, thumb=True):
@@ -203,32 +184,44 @@ def pc(addr, thumb=True):
 # Extremely limited instruction interpretation
 # IT blocks are not currently supported
 
-def run_ldr_pc(regs, memory, instr, mo):
+def run_ldr_pc(regs, memory, instr, mo, base):
     m = re.match(r'ldr(?:[.][w])? (\w+), \[pc(?:, #(\d+))?](?!,)', instr)
     if not m:
         return None
 
     target = m.group(1)
 
-    regs[target] = load_word(memory, addr_to_offset(
-        int(mo.group('offset') if mo.group('offset') else mo.group('offset2'), 16)))
+    regs[target] = load_word(memory, int(mo.group('offset'), 16)) - base
 
     return target
 
 
-def run_add(regs, memory, instr):
-    m = re.match(r'adds?(?:[.][w])? (\w+), (\w+)(, (\w+))?', instr)
+def run_add(regs, memory, instr, aa):
+    m = re.match(r'adds?(?:[.][w])? (\w+), (#?\w+)(, (#?\w+))?', instr)
     if not m:
         return None
 
     target = m.group(1)
 
+    ret = 0
     if m.group(3):
-        args = [regs[m.group(2)], regs[m.group(4)]]
+        ret += regs[m.group(2)]
+        op2 = m.group(4)
     else:
-        args = [regs[m.group(1)], regs[m.group(2)]]
-
-    regs[target] = word_clamp(sum(args))
+        ret += regs[m.group(1)]
+        op2 = m.group(2)
+    
+    if op2[0] == '#':
+        ret += int(op2[1:], 0)
+    else:
+        ret += regs[op2]
+    
+    if target[0] == 'x':
+        ret = xword_clamp(ret)
+    else:
+        ret = word_clamp(ret)
+    
+    regs[target] = ret
 
     return target
 
@@ -243,8 +236,8 @@ def run_mov(regs, memory, instr):
     if arg[0] != '#':
         regs[target] = regs[arg]
     else:
-        regs[target] = int(arg[1:])
-
+        regs[target] = int(arg[1:], 0)
+        
     return target
 
 
@@ -259,12 +252,23 @@ def run_movt(regs, memory, instr):
     if arg[0] != '#':
         regs[target] = (regs[target] & 0xffff) | (regs[arg] << 16)
     else:
-        regs[target] = (regs[target] & 0xffff) | (int(arg[1:]) << 16)
+        regs[target] = (regs[target] & 0xffff) | (int(arg[1:], 0) << 16)
+
+    return target
+    
+def run_adr(regs, memory, instr, mo):
+    m = re.match(r'adrp? (\w+),', instr)
+    if not m:
+        return None
+    
+    target = m.group(1)
+    arg = int(mo.group('offset'), 16)
+    regs[target] = arg
 
     return target
 
 
-def run(memory, m):
+def run(memory, m, base=0):
     instr = m.group('instr').strip().replace('\t', ' ')
 
     addr = int(m.group('addr'), 16)
@@ -275,10 +279,11 @@ def run(memory, m):
     # length of "word" group is 9 for 2byte thumb instructions
     regs['pc'] = pc(addr, False if len(m.group('word')) == 8 else True)
 
-    ret = run_ldr_pc(regs, memory, instr, m) or \
-        run_add(regs, memory, instr) or \
+    ret = run_ldr_pc(regs, memory, instr, m, base) or \
+        run_add(regs, memory, instr, addr) or \
         run_mov(regs, memory, instr) or \
-        run_movt(regs, memory, instr)
+        run_movt(regs, memory, instr) or \
+        run_adr(regs, memory, instr, m)
 
     if ret and not show_on_branch:
         cstring_check(memory, addr, regs[ret])
@@ -290,7 +295,12 @@ def run(memory, m):
 
 def runcode(memory, codestr):
     '''Run code from an objdump disassembly, skipping anything we don't know.'''
-    current_line = 0
+    # we'd want objdump to use file offsets everywhere, but this is not possible
+    # let's approximate this by remembering the delta we see.
+    # that should work, because we always have the offset for the ldr instruction
+    # then add r1, pc, r1 will use this delta
+    last_base = 0
+
 
     for line in codestr.split('\n'):
         if not line.strip():
@@ -311,39 +321,44 @@ def runcode(memory, codestr):
 
         if display_code:
             print(line, end='')
+        
+        if m.group('offset'):
+            if m.group('cmt'):
+                vm_addr = int(m.group('cmt').split(' ')[1], 16)
+            else:
+                vm_addr = int(m.group('instr').split('\t')[1].split(' ', 1)[0], 16)
+            last_base = vm_addr - int(m.group('offset'), 16)
 
-        run(memory, m)
+        run(memory, m, base=last_base)
 
         if display_code:
             print('')
 
+class RegisterDict:
+    def __init__(self):
+        self.r = defaultdict(int)
+    
+    def __setitem__(self, name, val):
+        is_64 = name[0] == 'x'
+        name = name.replace('w', 'x')
+        self.r[name] = xword_clamp(val) if is_64 else word_clamp(val)
+        
+    def __getitem__(self, name):
+        name = name.replace('w', 'x')
+        return self.r[name]
 
+   
+   
 def main():
-    global mem, regs, file_mem_layout
+    global mem, regs
     mem = None
+    # regs = RegisterDict()
     regs = defaultdict(int)
 
     obj = args.file
 
     with open(obj, 'rb') as f:
         mem = f.read()
-
-        f.seek(0)
-
-        file_mem_layout = []
-
-        elf = ELFFile(f)
-
-        prev_addr = 0
-        for x in range(elf.num_sections()):
-            s = elf.get_section(x)
-
-            if s['sh_addr'] < prev_addr:
-                break
-
-            prev_addr = s['sh_addr']
-
-            file_mem_layout.append([s['sh_addr'], s['sh_offset']])
 
     runcode(mem, disassemble(obj))
 
