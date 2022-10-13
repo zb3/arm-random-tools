@@ -66,7 +66,9 @@ show_on_branch = args.show_on_branch  # not as good as I thought...
 
 # regex matching an asm line in objdump with default settings
 instr_re = re.compile(
-    r'\W+(?P<addr>[0-9a-f]+):\W+(?P<word>[0-9a-f]+([ ][0-9a-f]+)?)\W+(?P<instr>[^;()]*)(?P<cmt>[^()]*)(\(File Offset: (?P<offset>0x[0-9a-f]+)\))?.*?$')
+    r'\W+(?P<addr>[0-9a-f]+):\W+(?P<word>[0-9a-f]+([ ][0-9a-f]+)?)\W+(?P<instr>[^;()]*)')
+offset_re = re.compile(
+    r'(?P<vmoffset>[0-9a-f]+) <[^>]+> \(File Offset: (?P<offset>0x[0-9a-f]+)\)')
 objdump = BASE + 'objdump'
 
 
@@ -268,7 +270,7 @@ def run_adr(regs, memory, instr, mo):
     return target
 
 
-def run(memory, m, base=0):
+def run(memory, m, m_offset, base=0):
     instr = m.group('instr').strip().replace('\t', ' ')
 
     addr = int(m.group('addr'), 16)
@@ -279,11 +281,11 @@ def run(memory, m, base=0):
     # length of "word" group is 9 for 2byte thumb instructions
     regs['pc'] = pc(addr, False if len(m.group('word')) == 8 else True)
 
-    ret = run_ldr_pc(regs, memory, instr, m, base) or \
+    ret = run_ldr_pc(regs, memory, instr, m_offset, base) or \
         run_add(regs, memory, instr, addr) or \
         run_mov(regs, memory, instr) or \
         run_movt(regs, memory, instr) or \
-        run_adr(regs, memory, instr, m)
+        run_adr(regs, memory, instr, m_offset)
 
     if ret and not show_on_branch:
         cstring_check(memory, addr, regs[ret])
@@ -321,15 +323,12 @@ def runcode(memory, codestr):
 
         if display_code:
             print(line, end='')
-        
-        if m.group('offset'):
-            if m.group('cmt'):
-                vm_addr = int(m.group('cmt').split(' ')[1], 16)
-            else:
-                vm_addr = int(m.group('instr').split('\t')[1].split(' ', 1)[0], 16)
-            last_base = vm_addr - int(m.group('offset'), 16)
 
-        run(memory, m, base=last_base)
+        m_offset = offset_re.search(line)
+        if m_offset:
+            last_base = int(m_offset.group('vmoffset'), 16) - int(m_offset.group('offset'), 16)
+
+        run(memory, m, m_offset, base=last_base)
 
         if display_code:
             print('')
